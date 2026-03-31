@@ -315,7 +315,10 @@
             wavePending: false,
             invincible: false,
             respawnTimer: 0,
-            playAgainBtn: null
+            playAgainBtn: null,
+
+            infernoBeamActive: false,
+            explosionZones: []
         };
 
         // ============================================
@@ -461,6 +464,8 @@
             gameState.invincible = false;
             gameState.respawnTimer = 0;
             gameState.playAgainBtn = null;
+            gameState.infernoBeamActive = false;
+            gameState.explosionZones = [];
 
             document.getElementById('introPopup').classList.add('hidden');
             initAudio();
@@ -489,6 +494,8 @@
             gameState.invincible = false;
             gameState.respawnTimer = 0;
             gameState.playAgainBtn = null;
+            gameState.infernoBeamActive = false;
+            gameState.explosionZones = [];
 
             spawnWave();
         }
@@ -658,6 +665,7 @@
                     gameState.shieldHealth = gameState.maxShield;
                     gameState.enemies = [];
                     gameState.bullets = [];
+                    gameState.explosionZones = [];
                     spawnWave();
                 }
                 return;
@@ -698,14 +706,6 @@
                 if (gameState.currentWeapon === WEAPONS.VULCAN) {
                     fireVulcan();
                     gameState.lastFireTime = currentTime;
-                } else if (gameState.currentWeapon === WEAPONS.INFERNO && gameState.infernoActive) {
-                    fireInferno();
-                    gameState.lastFireTime = currentTime;
-                    gameState.infernoFuel -= 0.125;
-                    if (gameState.infernoFuel <= 0) {
-                        gameState.infernoActive = false;
-                        gameState.infernoFuel = gameState.infernoMaxFuel;
-                    }
                 } else if (gameState.currentWeapon === WEAPONS.NOVA && gameState.novaActive && gameState.novaBombs > 0) {
                     fireNova();
                     gameState.lastFireTime = currentTime;
@@ -742,6 +742,7 @@
             // Collision detection: bullets vs enemies
             for (let i = gameState.bullets.length - 1; i >= 0; i--) {
                 const bullet = gameState.bullets[i];
+                if (bullet.isNova) continue; // Nova bombs handled separately
                 let hit = false;
 
                 for (let j = gameState.enemies.length - 1; j >= 0; j--) {
@@ -896,6 +897,89 @@
                     }
                 }
             });
+
+            // ---- INFERNO BEAM (continuous while gesture 2 held + fuel > 0) ----
+            gameState.infernoBeamActive = false;
+            if (gesture === GESTURE_TWO && gameState.infernoActive && gameState.infernoFuel > 0) {
+                gameState.infernoBeamActive = true;
+                // Instant-kill all enemies in the beam's path
+                const beamX = gameState.playerX;
+                gameState.enemies.forEach(e => {
+                    if (Math.abs(e.x - beamX) < (e.width / 2 + 15)) {
+                        e.hp = 0;
+                    }
+                });
+                // Deplete fuel (8 seconds total)
+                gameState.infernoFuel -= deltaTime;
+                if (gameState.infernoFuel <= 0) {
+                    gameState.infernoFuel = gameState.infernoMaxFuel;
+                    gameState.infernoActive = false;
+                    gameState.infernoBeamActive = false;
+                }
+            }
+
+            // ---- NOVA BOMB DETONATION (contact with enemy or 3s timeout) ----
+            for (let i = gameState.bullets.length - 1; i >= 0; i--) {
+                const bullet = gameState.bullets[i];
+                if (!bullet.isNova) continue;
+                let detonated = false;
+                const age = (Date.now() - bullet.createdAt) / 1000;
+                if (age >= 3) detonated = true;
+                if (!detonated) {
+                    for (let j = 0; j < gameState.enemies.length; j++) {
+                        const e = gameState.enemies[j];
+                        if (Math.hypot(e.x - bullet.x, e.y - bullet.y) < e.width / 2 + 15) {
+                            detonated = true;
+                            break;
+                        }
+                    }
+                }
+                if (detonated) {
+                    detonateNovaBomb(bullet.x, bullet.y);
+                    gameState.bullets.splice(i, 1);
+                }
+            }
+
+            // ---- EXPLOSION ZONES UPDATE ----
+            gameState.explosionZones.forEach(zone => {
+                zone.age += deltaTime;
+                if (zone.age < 0.5) {
+                    zone.radius = 30 + (zone.maxRadius - 30) * (zone.age / 0.5);
+                } else {
+                    zone.radius = zone.maxRadius;
+                }
+                if (zone.age >= zone.maxAge) zone.alive = false;
+                // Kill enemies inside the zone
+                gameState.enemies.forEach(e => {
+                    if (Math.hypot(e.x - zone.x, e.y - zone.y) < zone.radius + e.width / 2) {
+                        e.hp = 0;
+                    }
+                });
+            });
+            gameState.explosionZones = gameState.explosionZones.filter(z => z.alive);
+
+            // ---- CLEAN UP ENEMIES KILLED BY BEAM / ZONES ----
+            for (let i = gameState.enemies.length - 1; i >= 0; i--) {
+                const enemy = gameState.enemies[i];
+                if (enemy.hp <= 0) {
+                    scoreEnemy(enemy);
+                    createExplosion(enemy.x, enemy.y, 12);
+                    playExplosionSound();
+                    if (Math.random() < 0.25) {
+                        const boostType = Math.random();
+                        if (boostType < 0.4 && !gameState.infernoActive) {
+                            gameState.boosts.push({ x: enemy.x, y: enemy.y, type: 'INFERNO', size: 16, vy: 1.5, color: '#ff6600' });
+                        } else if (boostType < 0.7 && !gameState.novaActive) {
+                            gameState.boosts.push({ x: enemy.x, y: enemy.y, type: 'NOVA', size: 16, vy: 1.5, color: '#ff00ff' });
+                        } else if (boostType < 0.85) {
+                            gameState.boosts.push({ x: enemy.x, y: enemy.y, type: 'SHIELD', size: 14, vy: 1.5, color: '#0088ff' });
+                        } else {
+                            gameState.boosts.push({ x: enemy.x, y: enemy.y, type: 'LIFE', size: 14, vy: 1.5, color: '#ff0000' });
+                        }
+                    }
+                    gameState.enemies.splice(i, 1);
+                }
+            }
 
             // Check level completion / next wave
             // Only act when enemies are cleared and no wave spawn is already pending.
@@ -1064,9 +1148,26 @@
                 color: '#ff00ff',
                 isNova: true,
                 life: 3,
-                maxLife: 3
+                maxLife: 3,
+                createdAt: Date.now()
             });
             gameState.novaBombs--;
+        }
+
+        function detonateNovaBomb(x, y) {
+            gameState.explosionZones.push({
+                x: x,
+                y: y,
+                radius: 30,
+                maxRadius: 180,
+                age: 0,
+                maxAge: 2.0,
+                alive: true
+            });
+            gameState.screenShake = 0.4;
+            gameState.shakeIntensity = 10;
+            beep(60, 0.6, 'sawtooth');
+            setTimeout(() => beep(80, 0.4, 'sawtooth'), 80);
         }
 
         function createExplosion(x, y, particleCount) {
@@ -1083,6 +1184,89 @@
                     color: '#ffff00'
                 });
             }
+        }
+
+        function drawInfernoBeam(shipX, shipY) {
+            const flicker = Math.sin(Date.now() * 0.05) * 2;
+            const bw = 10 + flicker;
+
+            // Outer glow
+            ctx.save();
+            ctx.shadowBlur = 30;
+            ctx.shadowColor = '#ff4400';
+            ctx.strokeStyle = 'rgba(255, 100, 0, 0.3)';
+            ctx.lineWidth = bw * 3;
+            ctx.beginPath();
+            ctx.moveTo(shipX, shipY);
+            ctx.lineTo(shipX, 0);
+            ctx.stroke();
+
+            // Mid glow
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#ff8800';
+            ctx.strokeStyle = 'rgba(255, 180, 0, 0.6)';
+            ctx.lineWidth = bw * 1.5;
+            ctx.beginPath();
+            ctx.moveTo(shipX, shipY);
+            ctx.lineTo(shipX, 0);
+            ctx.stroke();
+
+            // Core beam
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = '#ffffff';
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = bw * 0.5;
+            ctx.beginPath();
+            ctx.moveTo(shipX, shipY);
+            ctx.lineTo(shipX, 0);
+            ctx.stroke();
+
+            // Heat distortion: overlapping lines with slight X offsets
+            ctx.shadowBlur = 0;
+            for (let d = -2; d <= 2; d++) {
+                if (d === 0) continue;
+                ctx.strokeStyle = `rgba(255, ${80 + Math.abs(d) * 30}, 0, 0.15)`;
+                ctx.lineWidth = bw * 0.4;
+                ctx.beginPath();
+                ctx.moveTo(shipX + d * 3, shipY);
+                ctx.lineTo(shipX + d * 3, 0);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        function drawExplosionZones() {
+            gameState.explosionZones.forEach(zone => {
+                const t = zone.age / zone.maxAge;
+                const alpha = 1 - t * 0.7;
+                const pulse = 0.7 + 0.3 * Math.sin(Date.now() * 0.015);
+
+                ctx.save();
+                ctx.shadowBlur = 40;
+                ctx.shadowColor = '#ff00ff';
+
+                // Outer ring
+                ctx.beginPath();
+                ctx.arc(zone.x, zone.y, zone.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255, 0, 255, ${alpha * pulse})`;
+                ctx.lineWidth = 4;
+                ctx.stroke();
+
+                // Inner fill (very faint)
+                ctx.beginPath();
+                ctx.arc(zone.x, zone.y, zone.radius, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(180, 0, 255, ${alpha * 0.08})`;
+                ctx.fill();
+
+                // Second ring (slightly smaller, offset phase)
+                ctx.beginPath();
+                ctx.arc(zone.x, zone.y, zone.radius * 0.7, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.4})`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                ctx.restore();
+            });
         }
 
         function scoreEnemy(enemy) {
@@ -1208,8 +1392,11 @@
         function drawBullets() {
             gameState.bullets.forEach(bullet => {
                 if (bullet.isNova) {
-                    // Nova bomb - pulsing magenta orb
+                    // Nova bomb - pulsing magenta orb (detonation handled in update)
                     const pulse = Math.sin(Date.now() / 100) * 0.3 + 0.7;
+                    ctx.save();
+                    ctx.shadowBlur = 20;
+                    ctx.shadowColor = '#ff00ff';
                     ctx.fillStyle = `rgba(255, 0, 255, ${pulse})`;
                     ctx.beginPath();
                     ctx.arc(bullet.x, bullet.y, bullet.w / 2, 0, Math.PI * 2);
@@ -1217,18 +1404,7 @@
                     ctx.strokeStyle = '#00ffff';
                     ctx.lineWidth = 2;
                     ctx.stroke();
-
-                    // Check collisions for nova
-                    gameState.enemies.forEach(enemy => {
-                        const dist = distance(bullet.x, bullet.y, enemy.x, enemy.y);
-                        if (dist < 100) {
-                            enemy.hp -= 200;
-                            if (enemy.hp <= 0) {
-                                scoreEnemy(enemy);
-                                createExplosion(enemy.x, enemy.y, 20);
-                            }
-                        }
-                    });
+                    ctx.restore();
                 } else {
                     // Vulcan bullets
                     ctx.fillStyle = bullet.color;
@@ -1628,8 +1804,10 @@
 
             // Draw game elements
             drawBackground();
+            drawExplosionZones(); // drawn before enemies so zones appear behind them
             drawEnemies();
             drawBullets();
+            if (gameState.infernoBeamActive) drawInfernoBeam(gameState.playerX, gameState.playerY);
             drawParticles();
             drawBoosts();
             drawPlayer();
