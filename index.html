@@ -249,8 +249,11 @@
             PLAYING: 'PLAYING',
             PAUSED: 'PAUSED',
             LEVEL_COMPLETE: 'LEVEL_COMPLETE',
-            GAME_OVER: 'GAME_OVER'
+            GAME_OVER: 'GAME_OVER',
+            VICTORY: 'VICTORY'
         };
+
+        const MAX_LEVEL = 5;
 
         const WEAPONS = {
             VULCAN: 0,
@@ -307,7 +310,12 @@
             cameraStarted: false,
             audioContext: null,
 
-            cityScrollPos: 0
+            cityScrollPos: 0,
+
+            wavePending: false,
+            invincible: false,
+            respawnTimer: 0,
+            playAgainBtn: null
         };
 
         // ============================================
@@ -449,6 +457,10 @@
             gameState.novaActive = false;
             gameState.levelStartTime = Date.now();
             gameState.currentWeapon = WEAPONS.VULCAN;
+            gameState.wavePending = false;
+            gameState.invincible = false;
+            gameState.respawnTimer = 0;
+            gameState.playAgainBtn = null;
 
             document.getElementById('introPopup').classList.add('hidden');
             initAudio();
@@ -473,8 +485,11 @@
             gameState.novaActive = false;
             gameState.levelStartTime = Date.now();
             gameState.currentWeapon = WEAPONS.VULCAN;
+            gameState.wavePending = false;
+            gameState.invincible = false;
+            gameState.respawnTimer = 0;
+            gameState.playAgainBtn = null;
 
-            document.getElementById('gameOverOverlay').classList.add('hidden');
             spawnWave();
         }
 
@@ -483,10 +498,6 @@
         // ============================================
         function spawnWave() {
             gameState.wave++;
-            if (gameState.wave > gameState.maxWaves) {
-                completeLevel();
-                return;
-            }
 
             const enemyCount = 8 + gameState.level * 2;
 
@@ -617,11 +628,20 @@
         }
 
         function completeLevel() {
+            if (gameState.level >= MAX_LEVEL) {
+                gameState.currentState = GAME_STATES.VICTORY;
+                if (gameState.score > gameState.highScore) {
+                    gameState.highScore = gameState.score;
+                    localStorage.setItem('phantomFighterHighScore', gameState.highScore);
+                }
+                return;
+            }
             gameState.currentState = GAME_STATES.LEVEL_COMPLETE;
             gameState.levelCompleteFlashTime = 2;
             gameState.level++;
             gameState.wave = 0;
             gameState.maxWaves = 3;
+            gameState.wavePending = false;
         }
 
         // ============================================
@@ -650,6 +670,15 @@
                 gameState.playerX = lerp(gameState.playerX, gameState.handState.x, 0.2);
             }
             gameState.playerX = Math.max(gameState.playerWidth / 2, Math.min(CANVAS_WIDTH - gameState.playerWidth / 2, gameState.playerX));
+
+            // Update invincibility timer (granted on respawn)
+            if (gameState.invincible) {
+                gameState.respawnTimer -= deltaTime;
+                if (gameState.respawnTimer <= 0) {
+                    gameState.invincible = false;
+                    gameState.respawnTimer = 0;
+                }
+            }
 
             // Update weapon and firing
             const currentTime = Date.now() / 1000;
@@ -816,18 +845,22 @@
                         const dist = distance(px, py, bullet.x, bullet.y);
 
                         if (dist < 20) {
-                            gameState.shieldHealth--;
-                            createExplosion(px, py, 8);
-                            playHitSound();
-                            gameState.screenShake = 0.3;
-                            gameState.shakeIntensity = 5;
+                            if (!gameState.invincible) {
+                                gameState.shieldHealth--;
+                                createExplosion(px, py, 8);
+                                playHitSound();
+                                gameState.screenShake = 0.3;
+                                gameState.shakeIntensity = 5;
 
-                            if (gameState.shieldHealth <= 0) {
-                                gameState.lives--;
-                                if (gameState.lives <= 0) {
-                                    endGame();
-                                } else {
-                                    gameState.shieldHealth = gameState.maxShield;
+                                if (gameState.shieldHealth <= 0) {
+                                    gameState.lives--;
+                                    if (gameState.lives <= 0) {
+                                        endGame();
+                                    } else {
+                                        gameState.shieldHealth = gameState.maxShield;
+                                        gameState.invincible = true;
+                                        gameState.respawnTimer = 2;
+                                    }
                                 }
                             }
                             return false;
@@ -843,27 +876,39 @@
                     enemy.x, enemy.y);
 
                 if (dist < 30) {
-                    gameState.shieldHealth -= 2;
-                    createExplosion(gameState.playerX, gameState.playerY, 10);
-                    playHitSound();
-                    gameState.screenShake = 0.4;
-                    gameState.shakeIntensity = 8;
+                    if (!gameState.invincible) {
+                        gameState.shieldHealth -= 2;
+                        createExplosion(gameState.playerX, gameState.playerY, 10);
+                        playHitSound();
+                        gameState.screenShake = 0.4;
+                        gameState.shakeIntensity = 8;
 
-                    if (gameState.shieldHealth <= 0) {
-                        gameState.lives--;
-                        if (gameState.lives <= 0) {
-                            endGame();
-                        } else {
-                            gameState.shieldHealth = gameState.maxShield;
+                        if (gameState.shieldHealth <= 0) {
+                            gameState.lives--;
+                            if (gameState.lives <= 0) {
+                                endGame();
+                            } else {
+                                gameState.shieldHealth = gameState.maxShield;
+                                gameState.invincible = true;
+                                gameState.respawnTimer = 2;
+                            }
                         }
                     }
                 }
             });
 
-            // Check level completion
-            if (gameState.enemies.length === 0 && gameState.bullets.length === 0) {
+            // Check level completion / next wave
+            // Only act when enemies are cleared and no wave spawn is already pending.
+            // wavePending prevents this block from firing every frame while the
+            // staggered spawn timeouts are still queuing enemies.
+            if (gameState.enemies.length === 0 && !gameState.wavePending) {
+                gameState.wavePending = true;
                 setTimeout(() => {
-                    if (gameState.enemies.length === 0) {
+                    gameState.wavePending = false;
+                    if (gameState.wave >= gameState.maxWaves) {
+                        // All waves exhausted and screen is clear → level done
+                        completeLevel();
+                    } else {
                         spawnWave();
                     }
                 }, 500);
@@ -1048,10 +1093,10 @@
 
         function endGame() {
             gameState.currentState = GAME_STATES.GAME_OVER;
-            document.getElementById('finalScore').textContent = `SCORE: ${gameState.score}`;
-            document.getElementById('finalLevel').textContent = `LEVEL: ${gameState.level}`;
-            document.getElementById('highScoreDisplay').textContent = `HIGH SCORE: ${gameState.highScore}`;
-            document.getElementById('gameOverOverlay').classList.remove('hidden');
+            if (gameState.score > gameState.highScore) {
+                gameState.highScore = gameState.score;
+                localStorage.setItem('phantomFighterHighScore', gameState.highScore);
+            }
         }
 
         // ============================================
@@ -1111,6 +1156,9 @@
         }
 
         function drawPlayer() {
+            // Blink the ship every 150ms while invincible
+            if (gameState.invincible && Math.floor(Date.now() / 150) % 2 === 0) return;
+
             const x = gameState.playerX;
             const y = gameState.playerY;
 
@@ -1455,6 +1503,108 @@
             ctx.fillText(text, (CANVAS_WIDTH - textWidth) / 2, CANVAS_HEIGHT / 2);
         }
 
+        function drawGameOver() {
+            // Dark overlay
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            ctx.textAlign = 'center';
+
+            // GAME OVER title with glow
+            ctx.shadowColor = '#ff0000';
+            ctx.shadowBlur = 30;
+            ctx.fillStyle = '#ff0000';
+            ctx.font = 'bold 38px "Press Start 2P"';
+            ctx.fillText('GAME OVER', CANVAS_WIDTH / 2, 195);
+            ctx.shadowBlur = 0;
+
+            // Score
+            ctx.fillStyle = '#ffff00';
+            ctx.font = 'bold 16px "Press Start 2P"';
+            ctx.fillText(`SCORE: ${gameState.score}`, CANVAS_WIDTH / 2, 270);
+
+            // High score
+            ctx.fillStyle = '#00ff00';
+            ctx.fillText(`HIGH SCORE: ${gameState.highScore}`, CANVAS_WIDTH / 2, 312);
+
+            // PLAY AGAIN button (glowing rectangle)
+            const btnX = CANVAS_WIDTH / 2 - 135;
+            const btnY = 362;
+            const btnW = 270;
+            const btnH = 56;
+
+            ctx.shadowColor = '#ff4400';
+            ctx.shadowBlur = 22;
+            ctx.fillStyle = 'rgba(200, 30, 0, 0.28)';
+            ctx.fillRect(btnX, btnY, btnW, btnH);
+            ctx.strokeStyle = '#ff4400';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(btnX, btnY, btnW, btnH);
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 14px "Press Start 2P"';
+            ctx.fillText('PLAY AGAIN', CANVAS_WIDTH / 2, btnY + 35);
+
+            ctx.textAlign = 'left';
+
+            // Store button bounds for click detection
+            gameState.playAgainBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
+        }
+
+        function drawVictory() {
+            // Dark overlay
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            ctx.textAlign = 'center';
+
+            // VICTORY title with glow
+            ctx.shadowColor = '#00ffff';
+            ctx.shadowBlur = 30;
+            ctx.fillStyle = '#00ffff';
+            ctx.font = 'bold 38px "Press Start 2P"';
+            ctx.fillText('VICTORY!', CANVAS_WIDTH / 2, 195);
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = '#ffff00';
+            ctx.font = 'bold 14px "Press Start 2P"';
+            ctx.fillText('ALL LEVELS CLEARED', CANVAS_WIDTH / 2, 240);
+
+            // Final score
+            ctx.fillStyle = '#ffff00';
+            ctx.font = 'bold 16px "Press Start 2P"';
+            ctx.fillText(`FINAL SCORE: ${gameState.score}`, CANVAS_WIDTH / 2, 300);
+
+            // High score
+            ctx.fillStyle = '#00ff00';
+            ctx.fillText(`HIGH SCORE: ${gameState.highScore}`, CANVAS_WIDTH / 2, 342);
+
+            // PLAY AGAIN button
+            const btnX = CANVAS_WIDTH / 2 - 135;
+            const btnY = 390;
+            const btnW = 270;
+            const btnH = 56;
+
+            ctx.shadowColor = '#00ff00';
+            ctx.shadowBlur = 22;
+            ctx.fillStyle = 'rgba(0, 180, 0, 0.22)';
+            ctx.fillRect(btnX, btnY, btnW, btnH);
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(btnX, btnY, btnW, btnH);
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 14px "Press Start 2P"';
+            ctx.fillText('PLAY AGAIN', CANVAS_WIDTH / 2, btnY + 35);
+
+            ctx.textAlign = 'left';
+
+            // Store button bounds for click detection
+            gameState.playAgainBtn = { x: btnX, y: btnY, w: btnW, h: btnH };
+        }
+
         function draw() {
             ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -1479,6 +1629,22 @@
 
             if (gameState.currentState === GAME_STATES.LEVEL_COMPLETE) {
                 drawLevelComplete();
+            }
+
+            // Respawning flash text
+            if (gameState.invincible && gameState.respawnTimer > 0) {
+                ctx.textAlign = 'center';
+                ctx.fillStyle = `rgba(255, 255, 0, ${Math.abs(Math.sin(Date.now() / 200))})`;
+                ctx.font = 'bold 20px "Press Start 2P"';
+                ctx.fillText('RESPAWNING...', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 20);
+                ctx.textAlign = 'left';
+            }
+
+            if (gameState.currentState === GAME_STATES.GAME_OVER) {
+                drawGameOver();
+            }
+            if (gameState.currentState === GAME_STATES.VICTORY) {
+                drawVictory();
             }
 
             ctx.restore();
@@ -1509,6 +1675,21 @@
         });
 
         document.getElementById('playAgainButton').addEventListener('click', resetGame);
+
+        // Canvas click handler: PLAY AGAIN button on GAME_OVER / VICTORY screens
+        canvas.addEventListener('click', (e) => {
+            if (gameState.currentState !== GAME_STATES.GAME_OVER &&
+                gameState.currentState !== GAME_STATES.VICTORY) return;
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = CANVAS_WIDTH / rect.width;
+            const scaleY = CANVAS_HEIGHT / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+            const btn = gameState.playAgainBtn;
+            if (btn && x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
+                resetGame();
+            }
+        });
 
         gameLoop();
     </script>
