@@ -1005,9 +1005,18 @@
 
             enemy.y += enemy.vy;
 
-            // Update enemy bullets
+            // Wraparound: enemies that scroll past the bottom reappear at the top (Galaga style)
+            if (enemy.y > CANVAS_HEIGHT + enemy.height) {
+                enemy.y = -enemy.height - 10;  // reappear just above the top
+                enemy.x = Math.random() * (CANVAS_WIDTH - 60) + 30; // randomize X so they don't stack
+            }
+            // Horizontal wraparound for enemies that drift off the side edges
+            if (enemy.x < -enemy.width) enemy.x = CANVAS_WIDTH + enemy.width;
+            if (enemy.x > CANVAS_WIDTH + enemy.width) enemy.x = -enemy.width;
+
+            // Update enemy bullets — bullets do NOT wrap, only enemies do
             if (enemy.bullets) {
-                enemy.bullets = enemy.bullets.filter(b => b.y < CANVAS_HEIGHT);
+                enemy.bullets = enemy.bullets.filter(b => b.y < CANVAS_HEIGHT && b.y > 0);
             }
         }
 
