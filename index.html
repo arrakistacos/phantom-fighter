@@ -458,6 +458,7 @@
             gameState.boosts = [];
             gameState.infernoActive = false;
             gameState.novaActive = false;
+            gameState.novaBombs = 0;
             gameState.levelStartTime = Date.now();
             gameState.currentWeapon = WEAPONS.VULCAN;
             gameState.wavePending = false;
@@ -488,6 +489,7 @@
             gameState.boosts = [];
             gameState.infernoActive = false;
             gameState.novaActive = false;
+            gameState.novaBombs = 0;
             gameState.levelStartTime = Date.now();
             gameState.currentWeapon = WEAPONS.VULCAN;
             gameState.wavePending = false;
@@ -771,7 +773,7 @@
                                         vy: 1.5,
                                         color: '#ff6600'
                                     });
-                                } else if (boostType < 0.7 && !gameState.novaActive) {
+                                } else if (boostType < 0.7 && gameState.novaBombs < gameState.novaMaxBombs) {
                                     gameState.boosts.push({
                                         x: enemy.x,
                                         y: enemy.y,
@@ -821,9 +823,9 @@
                         gameState.infernoActive = true;
                         gameState.infernoFuel = gameState.infernoMaxFuel;
                         playPowerUpSound();
-                    } else if (boost.type === 'NOVA' && !gameState.novaActive) {
+                    } else if (boost.type === 'NOVA' && gameState.novaBombs < gameState.novaMaxBombs) {
+                        gameState.novaBombs = Math.min(gameState.novaBombs + 1, gameState.novaMaxBombs);
                         gameState.novaActive = true;
-                        gameState.novaBombs = gameState.novaMaxBombs;
                         playPowerUpSound();
                     } else if (boost.type === 'SHIELD') {
                         gameState.shieldHealth = Math.min(gameState.maxShield, gameState.shieldHealth + 3);
@@ -969,7 +971,7 @@
                         const boostType = Math.random();
                         if (boostType < 0.4 && !gameState.infernoActive) {
                             gameState.boosts.push({ x: enemy.x, y: enemy.y, type: 'INFERNO', size: 16, vy: 1.5, color: '#ff6600' });
-                        } else if (boostType < 0.7 && !gameState.novaActive) {
+                        } else if (boostType < 0.7 && gameState.novaBombs < gameState.novaMaxBombs) {
                             gameState.boosts.push({ x: enemy.x, y: enemy.y, type: 'NOVA', size: 16, vy: 1.5, color: '#ff00ff' });
                         } else if (boostType < 0.85) {
                             gameState.boosts.push({ x: enemy.x, y: enemy.y, type: 'SHIELD', size: 14, vy: 1.5, color: '#0088ff' });
@@ -1152,6 +1154,9 @@
                 createdAt: Date.now()
             });
             gameState.novaBombs--;
+            if (gameState.novaBombs <= 0) {
+                gameState.novaActive = false;
+            }
         }
 
         function detonateNovaBomb(x, y) {
